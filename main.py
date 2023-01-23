@@ -1,8 +1,42 @@
+from typing import Union
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.functional as F
 
-class LeNet(nn.Module):
+class ForwardPreHook:
+
+    def __call__(self, module: nn.Module, *args) -> None:
+        for param in module.parameters():
+            param.data[param.mask == 0] = 0
+
+class Prunable(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+        self._hook = self.register_forward_pre_hook(ForwardPreHook())
+
+    def _create_mask(tensor: torch.Tensor) -> None:
+        tensor.mask = torch.ones_like(tensor)
+
+    def __setattr__(self, name: str, value: Union[torch.Tensor, nn.Module]) -> None:
+        if isinstance(value, nn.Module):
+            for param in value.parameters():
+                Prunable._create_mask(param)
+        elif isinstance(value, torch.Tensor):
+            Prunable._create_mask(value)
+        return super().__setattr__(name, value)
+        
+    def prune_(self, perc : float) -> None:
+    
+        for param in self.parameters():
+            q = torch.quantile(abs(param), perc).item()
+            param.mask[abs(param) < q] = 0
+
+        ForwardPreHook()(self)
+
+class LeNet(Prunable):
     """Inspired from
     https://github.com/lychengrex/LeNet-5-Implementation-Using-Pytorch/blob/master/LeNet-5%20Implementation%20Using%20Pytorch.ipynb"""
 
@@ -23,3 +57,28 @@ class LeNet(nn.Module):
         x = self.fc3(x)
         return x
 
+if __name__ == "__main__":
+
+    def test_prune(m: Prunable):
+            
+        z_g = 0
+        c_g = 0
+
+        for name, param in m.named_parameters():
+            z = torch.sum((param == 0).int())
+            c = torch.numel(param)
+
+            z_g += z
+            c_g += c
+
+            print(name, ": ", z / c)
+
+        print("Global: ", z_g / c_g)
+
+    m = LeNet()
+    print("Proportion of nulls (pruned) before:")
+    test_prune(m)
+
+    m.prune_(0.7)
+    print("Proportion of nulls (pruned) after:")
+    test_prune(m)
