@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.functional as F
+import dbload
 
 class ForwardPreHook:
     """Hook to apply pruning. See PyTorch doc about `Module`'s "forward pre-hooks" """
@@ -40,7 +41,8 @@ class Prunable(nn.Module):
         For each parameter, the weights with the lowest absolute value are pruned.
         `float` is a number between 0 and 1.
         
-        ### Note: pruning does not enforce the gradient to be null in the backward step.
+        ### Note:
+        Pruning does not enforce the gradient to be null in the backward step.
         It is only applied during evaluation."""
         for param in self.parameters():
             q = torch.quantile(abs(param), perc).item()
@@ -74,6 +76,8 @@ class LeNet(Prunable):
         return x
 
 if __name__ == "__main__":
+
+    print(next(iter(dbload.load_mnist()[0])))
 
     def test_prune(m: Prunable):
             
