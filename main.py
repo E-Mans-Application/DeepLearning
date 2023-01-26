@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import dbload
 import torch.optim as optim
+from tqdm import tqdm
 
 class ForwardPreHook:
 	"""Hook to apply pruning. See PyTorch doc about `Module`'s "forward pre-hooks" """
@@ -54,7 +55,7 @@ class Prunable(nn.Module):
 		Pruning does not enforce the gradient to be null in the backward step.
 		It is only applied during evaluation."""
 		for param in self.parameters():
-			q = torch.quantile(abs(param), perc).item()
+			q = torch.quantile(abs(param[param.mask == 1]), perc).item()
 			param.mask[abs(param) < q] = 0
 
 		# forces to apply hook (allows to immediately reflect the changes
@@ -84,82 +85,84 @@ class LeNet(Prunable):
 		x = self.fc3(x)
 		return x
 
-def training_loop (epochs, net, tuple_dataloader):
+def test_prune(m: Prunable):
+	
+	z_g = 0
+	c_g = 0
+
+	for name, param in m.named_parameters():
+		z = torch.sum((param == 0).int())
+		c = torch.numel(param)
+
+		z_g += z
+		c_g += c
+
+		print(name, ": ", z / c)
+
+	print("Global: ", z_g / c_g)
+
+def training_loop (epochs, net : Prunable, tuple_dataloader, prune_interval, prune_factor):
 	#cf	 https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
 	criterion = nn.CrossEntropyLoss()
 	optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
 	
-	running_loss = 0.0
-	for i in range(epochs):
-		for i, data in enumerate(tuple_dataloader[0], 0):
-			# get the inputs; data is a list of [inputs, labels]
-			inputs, labels = data
-		
-			# zero the parameter gradients
-			optimizer.zero_grad()
-		
-			# forward + backward + optimize
-			outputs = net(inputs)
-			loss = criterion(outputs, labels)
-			loss.backward()
-			optimizer.step()
-			
-		# print statistics
-		running_loss += loss.item()
-		if i % 2000 == 1999:	# print every 2000 mini-batches
-			print(f'[{epochs + 1}, {i + 1:5d}] loss: {running_loss / 2000:.3f}')
-		running_loss = 0.0
+	with tqdm(range(epochs)) as epoch:
 
-def validation(net, tuple_dataloader):
+		while epoch.n < epochs:
+			for data in tuple_dataloader[0]:
+				# get the inputs; data is a list of [inputs, labels]
+				inputs, labels = data
+			
+				# zero the parameter gradients
+				optimizer.zero_grad()
+			
+				# forward + backward + optimize
+				outputs = net(inputs)
+				loss = criterion(outputs, labels)
+				loss.backward()
+				optimizer.step()
+				
+				if epoch.n % 2000 == 0:	# print every 2000 mini-batches
+					validation(net, tuple_dataloader)
+
+				epoch.update()
+	
+				if epoch.n >= epochs:
+					break
+
+				if prune_interval > 0 and epoch.n % prune_interval == 0:
+					net.prune_(prune_factor)
+					test_prune(net)
+
+def validate(net, dataloader, desc):
 	#cf	 https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
+	
 	correct = 0
 	total = 0
+	for data in tqdm(dataloader, desc=desc):
+		images, labels = data
+		# calculate outputs by running images through the network
+		outputs = net(images)
+		# the class with the highest energy is what we choose as prediction
+		_, predicted = torch.max(outputs.data, 1)
+		total += labels.size(0)
+		correct += (predicted == labels).sum().item()
+
+	return 100 * correct // total
+
+def validation(net, tuple_dataloader):
+	
 	# since we're not training, we don't need to calculate the gradients for our outputs
 	with torch.no_grad():
-		for data in tuple_dataloader[1]:
-			images, labels = data
-			# calculate outputs by running images through the network
-			outputs = net(images)
-			# the class with the highest energy is what we choose as prediction
-			_, predicted = torch.max(outputs.data, 1)
-			total += labels.size(0)
-			correct += (predicted == labels).sum().item()
+		acc = validate(net, tuple_dataloader[1], desc="Validation (1/2)")		
+		print(f'Accuracy of the network on the {len(tuple_dataloader[1]) * tuple_dataloader[1].batch_size} test images: {acc} %')
 
-	print(f'Accuracy of the network on the 10000 test images: {100 * correct // total} %')
+		acc = validate(net, tuple_dataloader[0], desc="Validation (2/2)")
+		print(f'Accuracy of the network on the {len(tuple_dataloader[0]) * tuple_dataloader[0].batch_size} training images: {acc} %')
 
 if __name__ == "__main__":
-	
-	truc = Prunable()
-	x = torch.tensor([[1., -1.], [1., -1.]])
-	print("test1: ", truc.num_flat_features(x))
-	
-	
-	print(next(iter(dbload.load_mnist()[0])))
-	
-	def test_prune(m: Prunable):
-		
-		z_g = 0
-		c_g = 0
 
-		for name, param in m.named_parameters():
-			z = torch.sum((param == 0).int())
-			c = torch.numel(param)
-
-			z_g += z
-			c_g += c
-
-			print(name, ": ", z / c)
-
-		print("Global: ", z_g / c_g)
-
-	m = LeNet()
-	print("Proportion of nulls (pruned) before:")
-	test_prune(m)
-
-	m.prune_(0.7)
-	print("Proportion of nulls (pruned) after:")
-	test_prune(m)
-	
-	mist_db = dbload.load_mnist()
-	training_loop(2, m, mist_db)
-	validation(m, mist_db)
+	mist_db = dbload.load_mnist(batch_size=10)
+	model = LeNet()
+	training_loop(10000, model, mist_db, -1, 0.1)
+	validation(model, mist_db)

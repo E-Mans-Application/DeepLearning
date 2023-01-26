@@ -32,7 +32,7 @@ def load_dataset(set_provider, root_dir, batch_size=1, **kwargs) -> Tuple[DataLo
     test_set = set_provider(root=root_dir, train=False)
 
     train_loader = DataLoader(train_set, batch_size=batch_size, **kwargs)
-    test_loader = DataLoader(test_set, batch_size=1, **kwargs)
+    test_loader = DataLoader(test_set, batch_size=len(test_set), **kwargs)
 
     return train_loader, test_loader
 
