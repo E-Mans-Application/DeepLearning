@@ -85,6 +85,14 @@ class LeNet(Prunable):
 		x = self.fc3(x)
 		return x
 
+	def reset_parameters(self):
+		"""Resets the parameters using random values, but retains
+		the pruning status of the weights."""
+		for module in self.children():
+			module.reset_parameters()
+		ForwardPreHook()(self)
+
+
 def test_prune(m: Prunable):
 	
 	z_g = 0
@@ -164,5 +172,12 @@ if __name__ == "__main__":
 
 	mist_db = dbload.load_mnist(batch_size=10)
 	model = LeNet()
+	training_loop(10000, model, mist_db, 500, 0.1)
+	validation(model, mist_db)
+
+	print("Trying to train the pruned network from the beginning...")
+	model.reset_parameters()
+	test_prune(model)
+
 	training_loop(10000, model, mist_db, -1, 0.1)
 	validation(model, mist_db)
