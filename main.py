@@ -212,6 +212,64 @@ def calculate_accruracy_prunning(epochs, tuple_dataloader):
 	
 	return res
 
+
+def calculate_accruracy_prunning_correted(epochs, tuple_dataloader):
+	"""
+	return a dictionary where the key is the percentile of weights that have been prunned,
+	and the value is the accuracy percent of the retrained (without prior randomisation)
+	net
+	"""
+	res = {}
+	for prunning_percent in range(0, 100, 5):
+		model = LeNet()
+		training_loop (epochs, model, mist_db, 500, (1 - (1- float(prunning_percent)/ 100) ** (500/epochs)))
+		res[prunning_percent] = validate(model,tuple_dataloader[1], desc="Validation calculate_accruracy_prunning")
+	
+	return res
+
+def calculate_accruracy_prunning_pinpoint(epochs, tuple_dataloader):
+	"""
+	return a dictionary where the key is the percentile of weights that have been prunned,
+	and the value is the accuracy percent of the retrained (without prior randomisation)
+	net
+	"""
+	def training_loop_without_validation (epochs, net : Prunable, tuple_dataloader, prune_interval, prune_factor):
+		#cf	 https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
+		criterion = nn.CrossEntropyLoss()
+		optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
+	
+		with tqdm(range(epochs)) as epoch:
+
+			while epoch.n < epochs:
+				for data in tuple_dataloader[0]:
+					# get the inputs; data is a list of [inputs, labels]
+					inputs, labels = data
+			
+					# zero the parameter gradients
+					optimizer.zero_grad()
+			
+					# forward + backward + optimize
+					outputs = net(inputs)
+					loss = criterion(outputs, labels)
+					loss.backward()
+					optimizer.step()
+				
+					epoch.update()
+	
+					if epoch.n >= epochs:
+						break
+
+					if prune_interval > 0 and epoch.n % prune_interval == 0:
+						net.prune_(prune_factor)
+						test_prune(net)
+	res = {}
+	for prunning_percent in range(90, 101, 1):
+		model = LeNet()
+		training_loop_without_validation (epochs, model, mist_db, 500, (1 - (1- float(prunning_percent)/ 100) ** (500/epochs)))
+		res[prunning_percent] = validate(model,tuple_dataloader[1], desc="Validation calculate_accruracy_prunning")
+	
+	return res
+
 if __name__ == "__main__":
 	
 	# CLI exploitation
@@ -231,21 +289,24 @@ if __name__ == "__main__":
 	# Work
 	
 	mist_db = dbload.load_mnist(batch_size=10)
-	model = LeNet()
-	training_loop(10000, model, mist_db, 500, 0.1)
-	visualize_params(model, "Trained full network prunned")
-	validation(model, mist_db)
-
-	print("Trying to train the pruned network from the beginning...")
-	model.reset_parameters()
-	test_prune(model)
-
-	training_loop(10000, model, mist_db, -1, 0.1)
-	test_prune(model)
-	visualize_params(model, "Retrained prunned network")
-	validation(model, mist_db)
+# 	model = LeNet()
+# 	training_loop(10000, model, mist_db, 500, 0.1)
+# 	visualize_params(model, "Trained full network prunned")
+# 	validation(model, mist_db)
+# 
+# 	print("Trying to train the pruned network from the beginning...")
+# 	model.reset_parameters()
+# 	test_prune(model)
+# 
+# 	training_loop(10000, model, mist_db, -1, 0.1)
+# 	test_prune(model)
+# 	visualize_params(model, "Retrained prunned network")
+# 	validation(model, mist_db)
 	
-	result = calculate_accruracy_prunning(5000, mist_db)
+	#result = calculate_accruracy_prunning(10000, mist_db)
+	#result = calculate_accruracy_prunning_correted(5000, mist_db)
+	result = calculate_accruracy_prunning_pinpoint(5000, mist_db)
+	
 	
 	print(result)
 		
