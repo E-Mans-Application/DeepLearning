@@ -1,12 +1,21 @@
+
+
+import sys
+import pathlib
+
+
 from typing import Union
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import dbload
 import torch.optim as optim
 from tqdm import tqdm
+
+import dbload
+import visu
+
 
 class ForwardPreHook:
 	"""Hook to apply pruning. See PyTorch doc about `Module`'s "forward pre-hooks" """
@@ -93,21 +102,40 @@ class LeNet(Prunable):
 		ForwardPreHook()(self)
 
 
+def visualize_params(a_model, title = None):
+	
+	weights = {}
+	biases = {}
+	
+	for name, param in a_model.named_parameters():
+		
+		if title is not None:
+			if "weight" in name:
+				weights[name.removesuffix(".weight")] = param.detach().numpy()
+			if "bias" in name:
+				biases[name.removesuffix(".bias")] = param.detach().numpy()
+	
+	if title is not None:
+		visu.show_params(weights, biases, title, top_outputs_path)
+
+
 def test_prune(m: Prunable):
 	
 	z_g = 0
 	c_g = 0
-
+	
 	for name, param in m.named_parameters():
+		
 		z = torch.sum((param == 0).int())
 		c = torch.numel(param)
-
+		
 		z_g += z
 		c_g += c
-
+		
 		print(name, ": ", z / c)
-
+	
 	print("Global: ", z_g / c_g)
+
 
 def training_loop (epochs, net : Prunable, tuple_dataloader, prune_interval, prune_factor):
 	#cf	 https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
@@ -142,6 +170,7 @@ def training_loop (epochs, net : Prunable, tuple_dataloader, prune_interval, pru
 					net.prune_(prune_factor)
 					test_prune(net)
 
+
 def validate(net, dataloader, desc):
 	#cf	 https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
 	
@@ -158,6 +187,7 @@ def validate(net, dataloader, desc):
 
 	return 100 * correct // total
 
+
 def validation(net, tuple_dataloader):
 	
 	# since we're not training, we don't need to calculate the gradients for our outputs
@@ -168,11 +198,42 @@ def validation(net, tuple_dataloader):
 		acc = validate(net, tuple_dataloader[0], desc="Validation (2/2)")
 		print(f'Accuracy of the network on the {len(tuple_dataloader[0]) * tuple_dataloader[0].batch_size} training images: {acc} %')
 
-if __name__ == "__main__":
+def calculate_accruracy_prunning(epochs, tuple_dataloader):
+	"""
+	return a dictionary where the key is the percentile of weights that have been prunned,
+	and the value is the accuracy percent of the retrained (without prior randomisation)
+	net
+	"""
+	res = {}
+	for prunning_percent in range(0, 100, 5):
+		model = LeNet()
+		training_loop (epochs, model, mist_db, 500, float(prunning_percent)/ 100)
+		res[prunning_percent] = validate(model,tuple_dataloader[1], desc="Validation calculate_accruracy_prunning")
+	
+	return res
 
+if __name__ == "__main__":
+	
+	# CLI exploitation
+	
+	this_script_path = pathlib.Path(sys.argv[0])
+	
+	common_path = this_script_path.parent
+	
+	#this_script_name = this_script_path.stem
+	
+	# Storage management
+	
+	outputs_top_storage_name = "Outputs"
+	top_outputs_path = common_path / outputs_top_storage_name
+	top_outputs_path.mkdir(exist_ok = True)
+	
+	# Work
+	
 	mist_db = dbload.load_mnist(batch_size=10)
 	model = LeNet()
 	training_loop(10000, model, mist_db, 500, 0.1)
+	visualize_params(model, "Trained full network prunned")
 	validation(model, mist_db)
 
 	print("Trying to train the pruned network from the beginning...")
@@ -180,4 +241,12 @@ if __name__ == "__main__":
 	test_prune(model)
 
 	training_loop(10000, model, mist_db, -1, 0.1)
+	test_prune(model)
+	visualize_params(model, "Retrained prunned network")
 	validation(model, mist_db)
+	
+	result = calculate_accruracy_prunning(5000, mist_db)
+	
+	print(result)
+		
+	visu.show_accuracy(result, top_outputs_path)
